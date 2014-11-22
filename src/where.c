@@ -1558,6 +1558,7 @@ static int termCanDriveIndex(
   if( pTerm->u.leftColumn<0 ) return 0;
   aff = pSrc->pTab->aCol[pTerm->u.leftColumn].affinity;
   if( !sqlite3IndexAffinityOk(pTerm->pExpr, aff) ) return 0;
+  if( sqlite3ExprIsConstant(pTerm->pExpr->pRight) ) return 0;
   return 1;
 }
 #endif
@@ -4291,10 +4292,6 @@ static int whereLoopInsert(WhereLoopBuilder *pBuilder, WhereLoop *pTemplate){
 ** Adjust the WhereLoop.nOut value downward to account for terms of the
 ** WHERE clause that reference the loop but which are not used by an
 ** index.
-**
-** In the current implementation, the first extra WHERE clause term reduces
-** the number of output rows by a factor of 10 and each additional term
-** reduces the number of output rows by sqrt(2).
 */
 static void whereLoopOutputAdjust(
   WhereClause *pWC,      /* The WHERE clause */
