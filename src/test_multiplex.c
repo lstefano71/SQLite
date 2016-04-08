@@ -189,8 +189,11 @@ static struct {
   int isInitialized;
 
   /* For run-time access any of the other global data structures in this
-  ** shim, the following mutex must be held.
-  */
+  ** shim, the following mutex must be held. In practice, all this mutex
+  ** protects is add/remove operations to/from the linked list of group objects
+  ** starting at pGroups below. More specifically, it protects the value of
+  ** pGroups itself, and the pNext/pPrev fields of each multiplexGroup
+  ** structure.  */
   sqlite3_mutex *pMutex;
 
   /* List of multiplexGroup objects.
@@ -286,7 +289,7 @@ static void multiplexFilename(
 static int multiplexSubFilename(multiplexGroup *pGroup, int iChunk){
   if( iChunk>=pGroup->nReal ){
     struct multiplexReal *p;
-    p = sqlite3_realloc(pGroup->aReal, (iChunk+1)*sizeof(*p));
+    p = sqlite3_realloc64(pGroup->aReal, (iChunk+1)*sizeof(*p));
     if( p==0 ){
       return SQLITE_NOMEM;
     }
@@ -297,7 +300,7 @@ static int multiplexSubFilename(multiplexGroup *pGroup, int iChunk){
   if( pGroup->zName && pGroup->aReal[iChunk].z==0 ){
     char *z;
     int n = pGroup->nName;
-    pGroup->aReal[iChunk].z = z = sqlite3_malloc( n+5 );
+    pGroup->aReal[iChunk].z = z = sqlite3_malloc64( n+5 );
     if( z==0 ){
       return SQLITE_NOMEM;
     }
@@ -357,7 +360,7 @@ static sqlite3_file *multiplexSubOpen(
       }
       flags &= ~SQLITE_OPEN_CREATE;
     }
-    pSubOpen = sqlite3_malloc( pOrigVfs->szOsFile );
+    pSubOpen = sqlite3_malloc64( pOrigVfs->szOsFile );
     if( pSubOpen==0 ){
       *rc = SQLITE_IOERR_NOMEM;
       return 0;
@@ -524,7 +527,7 @@ static int multiplexOpen(
     nName = zName ? multiplexStrlen30(zName) : 0;
     sz = sizeof(multiplexGroup)                             /* multiplexGroup */
        + nName + 1;                                         /* zName */
-    pGroup = sqlite3_malloc( sz );
+    pGroup = sqlite3_malloc64( sz );
     if( pGroup==0 ){
       rc = SQLITE_NOMEM;
     }
@@ -655,7 +658,7 @@ static int multiplexDelete(
     */
     int nName = (int)strlen(zName);
     char *z;
-    z = sqlite3_malloc(nName + 5);
+    z = sqlite3_malloc64(nName + 5);
     if( z==0 ){
       rc = SQLITE_IOERR_NOMEM;
     }else{
@@ -714,7 +717,11 @@ static int multiplexCurrentTime(sqlite3_vfs *a, double *b){
   return gMultiplex.pOrigVfs->xCurrentTime(gMultiplex.pOrigVfs, b);
 }
 static int multiplexGetLastError(sqlite3_vfs *a, int b, char *c){
-  return gMultiplex.pOrigVfs->xGetLastError(gMultiplex.pOrigVfs, b, c);
+  if( gMultiplex.pOrigVfs->xGetLastError ){
+    return gMultiplex.pOrigVfs->xGetLastError(gMultiplex.pOrigVfs, b, c);
+  }else{
+    return 0;
+  }
 }
 static int multiplexCurrentTimeInt64(sqlite3_vfs *a, sqlite3_int64 *b){
   return gMultiplex.pOrigVfs->xCurrentTimeInt64(gMultiplex.pOrigVfs, b);
@@ -758,11 +765,8 @@ static int multiplexRead(
   multiplexConn *p = (multiplexConn*)pConn;
   multiplexGroup *pGroup = p->pGroup;
   int rc = SQLITE_OK;
-  int nMutex = 0;
-  multiplexEnter(); nMutex++;
   if( !pGroup->bEnabled ){
     sqlite3_file *pSubOpen = multiplexSubOpen(pGroup, 0, &rc, NULL, 0);
-    multiplexLeave(); nMutex--;
     if( pSubOpen==0 ){
       rc = SQLITE_IOERR_READ;
     }else{
@@ -772,9 +776,7 @@ static int multiplexRead(
     while( iAmt > 0 ){
       int i = (int)(iOfst / pGroup->szChunk);
       sqlite3_file *pSubOpen;
-      if( nMutex==0 ){ multiplexEnter(); nMutex++; }
       pSubOpen = multiplexSubOpen(pGroup, i, &rc, NULL, 1);
-      multiplexLeave(); nMutex--;
       if( pSubOpen ){
         int extra = ((int)(iOfst % pGroup->szChunk) + iAmt) - pGroup->szChunk;
         if( extra<0 ) extra = 0;
@@ -791,8 +793,7 @@ static int multiplexRead(
       }
     }
   }
-  assert( nMutex==0 || nMutex==1 );
-  if( nMutex ) multiplexLeave();
+
   return rc;
 }
 
@@ -809,7 +810,6 @@ static int multiplexWrite(
   multiplexConn *p = (multiplexConn*)pConn;
   multiplexGroup *pGroup = p->pGroup;
   int rc = SQLITE_OK;
-  multiplexEnter();
   if( !pGroup->bEnabled ){
     sqlite3_file *pSubOpen = multiplexSubOpen(pGroup, 0, &rc, NULL, 0);
     if( pSubOpen==0 ){
@@ -834,7 +834,6 @@ static int multiplexWrite(
       }
     }
   }
-  multiplexLeave();
   return rc;
 }
 
